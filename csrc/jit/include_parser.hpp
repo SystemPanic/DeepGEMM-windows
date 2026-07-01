@@ -54,22 +54,21 @@ public:
     }
 
     std::string get_hash_value_by_path(const std::filesystem::path& path) {
-        // Check whether hit in cache
-        // ReSharper disable once CppUseAssociativeContains
-        if (cache.count(path) > 0) {
-            const auto opt = cache[path];
+        const auto key = path.string();  // convert once
+
+        if (cache.count(key) > 0) {
+            const auto opt = cache[key];
             if (not opt.has_value())
-                DG_HOST_UNREACHABLE(fmt::format("Circular include may occur: {}", path.string()));
+                DG_HOST_UNREACHABLE(fmt::format("Circular include may occur: {}", key));
             return opt.value();
         }
 
-        // Read file and calculate hash recursively
         std::ifstream in(path);
         if (not in.is_open())
-            DG_HOST_UNREACHABLE(fmt::format("Failed to open: {}", path.string()));
+            DG_HOST_UNREACHABLE(fmt::format("Failed to open: {}", key));
         std::string code((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        cache[path] = std::nullopt;
-        return (cache[path] = get_hash_value(code, false)).value();
+        cache[key] = std::nullopt;
+        return (cache[key] = get_hash_value(code, false)).value();
     }
 };
 

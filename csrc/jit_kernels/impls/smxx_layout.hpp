@@ -130,7 +130,7 @@ static torch::Tensor get_mn_major_tma_aligned_tensor(const torch::Tensor& sf) {
         constexpr int block_mn = 64;
         constexpr int num_threads = 512;
         const auto smem_size = block_mn * (sf_k + (1 - (sf_k % 2))) * static_cast<int>(sizeof(float));
-        const TransposeFP32Runtime::Args& args = {
+        const TransposeFP32Runtime::Args args = {
             .mn = mn,
             .sf_k = sf_k,
             .block_mn = block_mn,
@@ -184,7 +184,7 @@ static torch::Tensor get_mn_major_tma_aligned_packed_ue8m0_tensor(const torch::T
 
         constexpr int block_mn = 48;
         constexpr int num_threads = 512;
-        const TransposeAndPackFP32IntoUE8M0Runtime::Args& args = {
+        const TransposeAndPackFP32IntoUE8M0Runtime::Args args = {
             .mn = mn,
             .sf_k = sf_k,
             .block_mn = block_mn,
@@ -204,7 +204,7 @@ static torch::Tensor get_mn_major_tma_aligned_packed_ue8m0_tensor(const torch::T
         constexpr int block_mn = 128;
         constexpr int block_packed_sf_k = 16;
         constexpr int num_threads = 512;
-        const PackFP32IntoUE8M0Runtime::Args& args = {
+        const PackFP32IntoUE8M0Runtime::Args args = {
             .num_groups = 1,
             .mn = mn,
             .sf_k = sf_k,
@@ -244,7 +244,7 @@ static torch::Tensor get_k_grouped_mn_major_tma_aligned_packed_ue8m0_tensor(cons
     constexpr int block_mn = 128;
     constexpr int block_packed_sf_k = 16;
     constexpr int num_threads = 512;
-    const PackFP32IntoUE8M0Runtime::Args& args = {
+    const PackFP32IntoUE8M0Runtime::Args args = {
         .num_groups = num_groups,
         .mn = mn,
         .sf_k = sf_k,

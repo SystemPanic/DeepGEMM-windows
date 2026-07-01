@@ -130,7 +130,7 @@ static void sm90_tf32_hc_prenorm_gemm(const torch::Tensor& a,
     smem_size = SM90ArchSpec::smem_capacity;
 
     // Launch
-    const SM90BF16HCPrenormGemmRuntime::Args& args = {
+    const SM90BF16HCPrenormGemmRuntime::Args args = {
         .m = m, .n = n, .k = k,
         .block_m = block_m, .block_n = block_n, .block_k = block_k,
         .num_splits = num_splits,

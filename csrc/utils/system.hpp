@@ -6,7 +6,16 @@
 #include <random>
 #include <string>
 #include <memory>
+#ifdef _WIN32
+#include <process.h>
+#include <io.h>
+#define popen _popen
+#define pclose _pclose
+#define WIFEXITED(x) true
+#define WEXITSTATUS(x) (x)
+#else
 #include <unistd.h>
+#endif
 
 #include "exception.hpp"
 #include "format.hpp"

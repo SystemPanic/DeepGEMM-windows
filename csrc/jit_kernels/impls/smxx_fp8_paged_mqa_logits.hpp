@@ -67,7 +67,7 @@ static void smxx_paged_mqa_logits_metadata(const torch::Tensor& context_lens,
     DG_HOST_ASSERT(smem_size <= SM100ArchSpec::smem_capacity);
 
     // Launch
-    const SMXXPagedMQALogitsMetadataRuntime::Args& args = {
+    const SMXXPagedMQALogitsMetadataRuntime::Args args = {
         .aligned_batch_size = aligned_batch_size,
         .split_kv = split_kv,
         .num_sms = num_sms,
@@ -231,7 +231,7 @@ static void smxx_fp8_paged_mqa_logits(const torch::Tensor& q,
     }
 
     // Launch
-    const SMXXFP8PagedMQALogitsRuntime::Args& args = {
+    const SMXXFP8PagedMQALogitsRuntime::Args args = {
         .batch_size = batch_size,
         .next_n = next_n,
         .num_heads = num_heads,

@@ -132,7 +132,7 @@ static void smxx_fp8_mqa_logits(const torch::Tensor& q,
     DG_HOST_ASSERT(smem_size <= SM100ArchSpec::smem_capacity);
 
     // Launch
-    const SMXXFP8MQALogitsRuntime::Args& args = {
+    const SMXXFP8MQALogitsRuntime::Args args = {
         .seq_len = seq_len,
         .seq_len_kv = seq_len_kv,
         .max_seqlen_k = max_seqlen_k,

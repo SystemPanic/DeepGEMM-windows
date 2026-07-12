@@ -121,7 +121,7 @@ static void sm100_fp8_fp4_gemm_1d1d(const torch::Tensor& a, const torch::Tensor&
                                                   config.block_n, gran_k_b, 1, 0);
 
     // Launch
-    const SM100FP8FP4Gemm1D1DRuntime::Args& args = {
+    const SM100FP8FP4Gemm1D1DRuntime::Args args = {
         .m = m, .n = n, .k = k,
         .num_groups = 1,
         .gran_k_a = gran_k_a,
@@ -190,7 +190,7 @@ static void sm100_m_grouped_fp8_fp4_gemm_contiguous_1d1d(const torch::Tensor& a,
                                                   config.block_n, gran_k_b, num_groups, 0);
 
     // Launch kernel
-    const SM100FP8FP4Gemm1D1DRuntime::Args& args = {
+    const SM100FP8FP4Gemm1D1DRuntime::Args args = {
         .m = m, .n = n, .k = k,
         .num_groups = num_groups,
         .gran_k_a = gran_k_a,
@@ -251,7 +251,7 @@ static void sm100_m_grouped_fp8_fp4_gemm_masked_1d1d(const torch::Tensor& a, con
                                                   config.block_n, gran_k_b, num_groups, 0);
 
     // Launch kernel
-    const SM100FP8FP4Gemm1D1DRuntime::Args& args = {
+    const SM100FP8FP4Gemm1D1DRuntime::Args args = {
         .m = m, .n = n, .k = k,
         .num_groups = num_groups,
         .gran_k_a = gran_k_a,
@@ -322,7 +322,7 @@ static void sm100_k_grouped_fp8_gemm_1d1d(const torch::Tensor& a, const torch::T
                                                   config.block_n, config.block_k, 1, 0);
 
     // Launch kernel
-    const SM100FP8FP4Gemm1D1DRuntime::Args& args = {
+    const SM100FP8FP4Gemm1D1DRuntime::Args args = {
         .m = m, .n = n, .k = sum_k,
         .num_groups = num_groups,
         .gran_k_a = 128,
@@ -390,7 +390,7 @@ static void sm100_fp8_bmm(const torch::Tensor& a, const torch::Tensor& sfa,
                                                   config.block_n, config.block_k, batch_size, 0);
 
     // Launch
-    const SM100FP8FP4Gemm1D1DRuntime::Args& args = {
+    const SM100FP8FP4Gemm1D1DRuntime::Args args = {
         .m = m, .n = n, .k = k,
         .num_groups = batch_size,
         .gran_k_a = 128,

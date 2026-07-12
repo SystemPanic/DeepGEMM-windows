@@ -109,7 +109,7 @@ static void sm120_bmn_bnk_mn_gemm(const torch::Tensor &a,
     const auto tensor_map_a = make_tma_2d_desc(a, k, s * m, block_k, block_m, k, swizzle_ab_mode);
     const auto tensor_map_b = make_tma_2d_desc(b, k, s * n, block_k, block_n, k, swizzle_ab_mode);
 
-    const SM120BmkBnkMnRuntime::Args& args = {
+    const SM120BmkBnkMnRuntime::Args args = {
         .s = s, .m = m, .n = n, .k = k,
         .block_m = block_m, .block_n = block_n, .block_k = block_k,
         .split_factor = split_factor,

@@ -163,7 +163,7 @@ static KernelHandle load_kernel(const std::filesystem::path& cubin_path, const s
     KernelHandle kernel;
 
 #ifdef DG_JIT_USE_LIBRARY_ENUM_KERNELS
-    DG_CUDA_DRIVER_CHECK(lazy_cuLibraryLoadFromFile(&library, cubin_path.string(), nullptr, nullptr, 0, nullptr, nullptr, 0));
+    DG_CUDA_DRIVER_CHECK(lazy_cuLibraryLoadFromFile(&library, cubin_path.string().c_str(), nullptr, nullptr, 0, nullptr, nullptr, 0));
     unsigned int num_kernels;
     DG_CUDA_DRIVER_CHECK(lazy_cuLibraryGetKernelCount(&num_kernels, library));
     if (num_kernels != 1) {

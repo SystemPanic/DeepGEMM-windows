@@ -59,7 +59,7 @@ static void smxx_clean_logits(const torch::Tensor& logits,
     const int smem_size = block_kv * sizeof(float);
 
     // Launch
-    const SMXXCleanLogitsRuntime::Args& args = {
+    const SMXXCleanLogitsRuntime::Args args = {
         .next_n = next_n,
         .seq_len = seq_len,
         .seq_len_kv = seq_len_kv,

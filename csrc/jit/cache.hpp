@@ -16,12 +16,15 @@ public:
     KernelRuntimeCache() = default;
 
     std::shared_ptr<KernelRuntime> get(const std::filesystem::path& dir_path) {
+        // Convert path to string for map lookup
+        std::string key = dir_path.string();
+
         // Hit the runtime cache
-        if (const auto iterator = cache.find(dir_path); iterator != cache.end())
+        if (const auto iterator = cache.find(key); iterator != cache.end())
             return iterator->second;
 
         if (KernelRuntime::check_validity(dir_path))
-            return cache[dir_path] = std::make_shared<KernelRuntime>(dir_path);
+            return cache[key] = std::make_shared<KernelRuntime>(dir_path);
         return nullptr;
     }
 };

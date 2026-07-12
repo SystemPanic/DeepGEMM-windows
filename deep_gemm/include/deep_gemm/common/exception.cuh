@@ -6,10 +6,20 @@
 #ifdef __CLION_IDE__
 
 CUTLASS_HOST_DEVICE void host_device_printf(const char* format, ...) {
+#ifdef _MSC_VER
+    __debugbreak();
+#else
     asm volatile("trap;");
+#endif
 }
 
 #define printf host_device_printf
+#endif
+
+#ifdef _MSC_VER
+#define DG_TRAP() __debugbreak()
+#else
+#define DG_TRAP() asm("trap;")
 #endif
 
 #ifndef DG_DEVICE_ASSERT
@@ -17,7 +27,7 @@ CUTLASS_HOST_DEVICE void host_device_printf(const char* format, ...) {
 do { \
     if (not (cond)) { \
         printf("Assertion failed: %s:%d, condition: %s\n", __FILE__, __LINE__, #cond); \
-        asm("trap;"); \
+        DG_TRAP(); \
     } \
 } while (0)
 #endif
@@ -26,7 +36,7 @@ do { \
 #define DG_TRAP_ONLY_DEVICE_ASSERT(cond) \
 do { \
     if (not (cond)) \
-        asm("trap;"); \
+        DG_TRAP(); \
 } while (0)
 #endif
 

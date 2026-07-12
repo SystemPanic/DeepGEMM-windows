@@ -40,12 +40,17 @@ static std::tuple<int, std::string> call_external_command(std::string command) {
 
     std::array<char, 512> buffer;
     std::string output;
-    while (fgets(buffer.data(), buffer.size(), pipe.get()))
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()))
         output += buffer.data();
     const auto status = pclose(pipe.release());
     // NOTES: if the child was killed by a signal (e.g., SIGINT from Ctrl+C),
     // WEXITSTATUS would incorrectly return 0. Treat signal death as failure.
+#ifdef _WIN32
+    // On Windows, pclose returns the exit code directly
+    const auto exit_code = status;
+#else
     const auto exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+#endif
     return {exit_code, output};
 }
 
@@ -74,10 +79,14 @@ static std::filesystem::path make_dirs(const std::filesystem::path& path) {
     const bool created = std::filesystem::create_directories(path, capture);
     if (not (created or capture.value() == 0)) {
         DG_HOST_UNREACHABLE(fmt::format("Failed to make directory: {}, created: {}, value: {}",
-                                        path.c_str(), created, capture.value()));
+                                        path.string(), created, capture.value()));
     }
     if (created and get_env<int>("DG_JIT_DEBUG"))
+#ifdef _WIN32
+        printf("Create directory: %ls\n", path.c_str());
+#else
         printf("Create directory: %s\n", path.c_str());
+#endif
     return path;
 }
 
@@ -89,7 +98,11 @@ static std::string get_uuid() {
     static std::uniform_int_distribution<uint32_t> dist;
 
     std::stringstream ss;
+#ifdef _WIN32
+    ss << _getpid() << "-"
+#else
     ss << getpid() << "-"
+#endif
        << std::hex << std::setfill('0')
        << std::setw(8) << dist(gen) << "-"
        << std::setw(8) << dist(gen) << "-"

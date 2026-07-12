@@ -121,7 +121,7 @@ static void sm90_fp8_gemm_1d1d(const torch::Tensor& a, const torch::Tensor& sfa,
                                                 0);
 
     // Launch
-    const SM90FP8Gemm1D1DRuntime::Args& args = {
+    const SM90FP8Gemm1D1DRuntime::Args args = {
         .gemm_desc = desc,
         .gemm_config = config,
         .launch_args = LaunchArgs(config.launch_config.num_sms, config.launch_config.num_threads,
@@ -204,7 +204,7 @@ static void sm90_k_grouped_fp8_gemm_1d1d(const torch::Tensor& a, const torch::Te
                                                 config.storage_config.swizzle_cd_mode);
 
     // Launch
-    const SM90FP8Gemm1D1DRuntime::Args& args = {
+    const SM90FP8Gemm1D1DRuntime::Args args = {
         .gemm_desc = desc,
         .gemm_config = config,
         .launch_args = LaunchArgs(config.launch_config.num_sms, config.launch_config.num_threads,

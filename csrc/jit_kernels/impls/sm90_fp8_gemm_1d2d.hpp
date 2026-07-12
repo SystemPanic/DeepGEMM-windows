@@ -124,7 +124,7 @@ static void sm90_fp8_gemm_1d2d(const torch::Tensor& a, const torch::Tensor& sfa,
                                                  config.layout.block_m, config.layout.block_k, 1, 0);
 
     // Launch
-    const SM90FP8Gemm1D2DRuntime::Args& args = {
+    const SM90FP8Gemm1D2DRuntime::Args args = {
         .gemm_desc = desc,
         .gemm_config = config,
         .launch_args = LaunchArgs(config.launch_config.num_sms, config.launch_config.num_threads,
@@ -201,7 +201,7 @@ static void sm90_m_grouped_fp8_gemm_contiguous_1d2d(const torch::Tensor& a, cons
                                                  config.layout.block_m, config.layout.block_k, 1, 0);
 
     // Launch
-    const SM90FP8Gemm1D2DRuntime::Args& args = {
+    const SM90FP8Gemm1D2DRuntime::Args args = {
         .gemm_desc = desc,
         .gemm_config = config,
         .launch_args = LaunchArgs(config.launch_config.num_sms, config.launch_config.num_threads,
@@ -268,7 +268,7 @@ static void sm90_m_grouped_fp8_gemm_masked_1d2d(const torch::Tensor& a, const to
                                                  config.layout.block_m, config.layout.block_k, num_groups, 0);
 
     // Launch
-    const SM90FP8Gemm1D2DRuntime::Args& args = {
+    const SM90FP8Gemm1D2DRuntime::Args args = {
         .gemm_desc = desc,
         .gemm_config = config,
         .launch_args = LaunchArgs(config.launch_config.num_sms, config.launch_config.num_threads,
@@ -339,7 +339,7 @@ static void sm90_fp8_bmm(const torch::Tensor& a, const torch::Tensor& sfa,
                                                  config.layout.block_m, config.layout.block_k, batch_size, 0);
 
     // Launch
-    const SM90FP8Gemm1D2DRuntime::Args& args = {
+    const SM90FP8Gemm1D2DRuntime::Args args = {
         .gemm_desc = desc,
         .gemm_config = config,
         .launch_args = LaunchArgs(config.launch_config.num_sms, config.launch_config.num_threads,

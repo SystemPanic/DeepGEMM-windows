@@ -127,7 +127,7 @@ static void sm100_tf32_hc_prenorm_gemm(const torch::Tensor& a,
     }
 
     // Launch
-    const SM100BF16HCPrenormGemmRuntime::Args& args = {
+    const SM100BF16HCPrenormGemmRuntime::Args args = {
         .m = m, .n = n, .k = k,
         .block_m = block_m, .block_n = block_n, .block_k = block_k,
         .num_splits = num_splits,

@@ -2,7 +2,11 @@
 
 #include <cuda.h>
 #include <cuda_runtime.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <filesystem>
 
 #include "../utils/exception.hpp"
@@ -14,11 +18,32 @@ namespace deep_gemm {
 static void* get_driver_handle() {
     static void* handle = nullptr;
     if (handle == nullptr) {
+#ifdef _WIN32
+        // On Windows, CUDA driver is typically nvcuda.dll
+        handle = LoadLibraryA("nvcuda.dll");
+        if (handle == nullptr) {
+            // Try alternative names
+            handle = LoadLibraryA("cuda.dll");
+        }
+        DG_HOST_ASSERT(handle != nullptr and "Failed to load CUDA driver library");
+#else
         handle = dlopen("libcuda.so.1", RTLD_LAZY | RTLD_LOCAL);
         DG_HOST_ASSERT(handle != nullptr and "Failed to load CUDA driver `libcuda.so.1`");
+#endif
     }
     return handle;
 }
+
+#ifdef _WIN32
+// Helper function to get symbol address on Windows
+static void* get_driver_symbol(void* handle, const char* symbol_name) {
+    return GetProcAddress((HMODULE)handle, symbol_name);
+}
+#else
+static void* get_driver_symbol(void* handle, const char* symbol_name) {
+    return dlsym(handle, symbol_name);
+}
+#endif
 
 // Macro to define wrapper functions named `lazy_cu{API name}`
 #define DECL_LAZY_CUDA_DRIVER_FUNCTION(name) \
@@ -27,7 +52,7 @@ static auto lazy_##name(Args&&... args) -> decltype(name(args...)) { \
     using FuncType = decltype(&(name)); \
     static FuncType func = nullptr; \
     if (func == nullptr) { \
-        func = reinterpret_cast<FuncType>(dlsym(get_driver_handle(), #name)); \
+        func = reinterpret_cast<FuncType>(get_driver_symbol(get_driver_handle(), #name)); \
         DG_HOST_ASSERT(func != nullptr and "Failed to load CUDA driver API"); \
     } \
     return func(std::forward<decltype(args)>(args)...); \
@@ -59,7 +84,7 @@ static KernelHandle load_kernel(const std::filesystem::path& cubin_path, const s
                                 LibraryHandle *library_opt = nullptr) {
     LibraryHandle library;
     KernelHandle kernel{};
-    DG_CUDA_RUNTIME_CHECK(cudaLibraryLoadFromFile(&library, cubin_path.c_str(), nullptr, nullptr, 0, nullptr, nullptr, 0));
+    DG_CUDA_RUNTIME_CHECK(cudaLibraryLoadFromFile(&library, cubin_path.string(), nullptr, nullptr, 0, nullptr, nullptr, 0));
     DG_CUDA_RUNTIME_CHECK(cudaLibraryGetKernel(&kernel, library, func_name.c_str()));
 
     if (library_opt != nullptr)
@@ -138,7 +163,7 @@ static KernelHandle load_kernel(const std::filesystem::path& cubin_path, const s
     KernelHandle kernel;
 
 #ifdef DG_JIT_USE_LIBRARY_ENUM_KERNELS
-    DG_CUDA_DRIVER_CHECK(lazy_cuLibraryLoadFromFile(&library, cubin_path.c_str(), nullptr, nullptr, 0, nullptr, nullptr, 0));
+    DG_CUDA_DRIVER_CHECK(lazy_cuLibraryLoadFromFile(&library, cubin_path.string(), nullptr, nullptr, 0, nullptr, nullptr, 0));
     unsigned int num_kernels;
     DG_CUDA_DRIVER_CHECK(lazy_cuLibraryGetKernelCount(&num_kernels, library));
     if (num_kernels != 1) {
@@ -153,7 +178,7 @@ static KernelHandle load_kernel(const std::filesystem::path& cubin_path, const s
     DG_CUDA_DRIVER_CHECK(lazy_cuLibraryEnumerateKernels(&cu_kernel, 1, library));
     DG_CUDA_DRIVER_CHECK(lazy_cuKernelGetFunction(&kernel, cu_kernel));
 #else
-    DG_CUDA_DRIVER_CHECK(lazy_cuModuleLoad(&library, cubin_path.c_str()));
+    DG_CUDA_DRIVER_CHECK(lazy_cuModuleLoad(&library, cubin_path.string()));
     DG_CUDA_DRIVER_CHECK(lazy_cuModuleGetFunction(&kernel, library, func_name.c_str()));
 #endif
 

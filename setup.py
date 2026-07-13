@@ -25,8 +25,12 @@ DG_USE_LOCAL_VERSION = int(os.getenv('DG_USE_LOCAL_VERSION', '1')) == 1
 DG_JIT_USE_RUNTIME_API = int(os.environ.get('DG_JIT_USE_RUNTIME_API', '0')) == 1
 
 # Compiler flags
-cxx_flags = ['-std=c++17', '-O3', '-fPIC', '-Wno-psabi', '-Wno-deprecated-declarations',
-             f'-D_GLIBCXX_USE_CXX11_ABI={int(torch.compiled_with_cxx11_abi())}']
+if sys.platform == "win32":
+    cxx_flags =  ["/std:c++20", "/O2", "/permissive-", "/utf-8", "/DNOMINMAX", "/Zc:preprocessor"]
+else:
+    cxx_flags = ['-std=c++17', '-O3', '-fPIC', '-Wno-psabi', '-Wno-deprecated-declarations',
+                 f'-D_GLIBCXX_USE_CXX11_ABI={int(torch.compiled_with_cxx11_abi())}']
+
 if DG_JIT_USE_RUNTIME_API:
     cxx_flags.append('-DDG_JIT_USE_RUNTIME_API')
 
@@ -41,7 +45,12 @@ build_include_dirs = [
     'third-party/fmt/include',
 ]
 build_libraries = ['cudart', 'nvrtc']
-build_library_dirs = [f'{CUDA_HOME}/lib64']
+if sys.platform == "win32":
+    build_libraries += ['cublas', 'cublasLt']
+    build_library_dirs = [f'{CUDA_HOME}/lib/x64']
+else:
+    build_library_dirs = [f'{CUDA_HOME}/lib64']
+
 third_party_include_dirs = [
     'third-party/cutlass/include/cute',
     'third-party/cutlass/include/cutlass',

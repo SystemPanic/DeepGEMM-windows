@@ -13,9 +13,11 @@ from pathlib import Path
 
 
 def _load_extension():
-    so_files = list(Path(__file__).parent.glob('_C_extension*.so'))
+    pkg_dir = Path(__file__).parent
+    so_files = [p for pattern in ('_C_extension*.so', '_C_extension*.pyd')
+                for p in pkg_dir.glob(pattern)]
     assert len(so_files) == 1, (
-        f'Expected one _C_extension*.so file, found {len(so_files)}: {so_files}'
+        f'Expected one _C_extension*.so/.pyd file, found {len(so_files)}: {so_files}'
     )
     torch.ops.load_library(str(so_files[0]))
 

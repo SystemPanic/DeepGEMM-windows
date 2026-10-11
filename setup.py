@@ -24,10 +24,11 @@ DG_FORCE_BUILD = int(os.getenv('DG_FORCE_BUILD', '0')) == 1
 DG_USE_LOCAL_VERSION = int(os.getenv('DG_USE_LOCAL_VERSION', '1')) == 1
 
 # Compiler flags
-cxx_flags = ['-std=c++20', '-O3', '-fPIC', '-Wno-psabi', '-Wno-deprecated-declarations',
-             '-DPy_LIMITED_API=0x030a0000',
-             '-DDJ_DISABLE_GIL=1',
-             f'-D_GLIBCXX_USE_CXX11_ABI={int(torch.compiled_with_cxx11_abi())}']
+if sys.platform == "win32":
+    cxx_flags =  ["/std:c++20", "/O2", "/permissive-", "/utf-8", "/DNOMINMAX", "/Zc:preprocessor"]
+else:
+    cxx_flags = ['-std=c++20', '-O3', '-fPIC', '-Wno-psabi', '-Wno-deprecated-declarations',
+                 f'-D_GLIBCXX_USE_CXX11_ABI={int(torch.compiled_with_cxx11_abi())}']
 
 # Sources
 current_dir = os.path.dirname(os.path.realpath(__file__))
@@ -40,7 +41,11 @@ build_include_dirs = [
     'third-party/cutlass/include',
 ]
 build_libraries = ['cudart']
-build_library_dirs = [f'{CUDA_HOME}/lib64']
+if sys.platform == "win32":
+    build_libraries += ['cublas', 'cublasLt']
+    build_library_dirs = [f'{CUDA_HOME}/lib/x64']
+else:
+    build_library_dirs = [f'{CUDA_HOME}/lib64']
 third_party_include_dirs = [
     'third-party/cutlass/include/cute',
     'third-party/cutlass/include/cutlass',
@@ -82,10 +87,10 @@ def get_platform():
 def get_wheel_url():
     torch_version = parse(torch.__version__)
     torch_version = f'{torch_version.major}.{torch_version.minor}'
-    python_version = 'cp310-abi3'
+    python_version = f'cp{sys.version_info.major}{sys.version_info.minor}'
     platform_name = get_platform()
     deep_gemm_version = get_package_version()
-    cxx11_abi = int(torch.compiled_with_cxx11_abi())
+    cxx11_abi = int(torch._C._GLIBCXX_USE_CXX11_ABI)
 
     # Determine the version numbers that will be used to determine the correct wheel
     # We're using the CUDA version used to build torch, not the one currently installed
@@ -107,8 +112,7 @@ def get_ext_modules():
                           include_dirs=build_include_dirs,
                           libraries=build_libraries,
                           library_dirs=build_library_dirs,
-                          extra_compile_args=cxx_flags,
-                          py_limited_api=True)]
+                          extra_compile_args=cxx_flags)]
 
 
 class CustomBuildPy(build_py):
@@ -137,7 +141,7 @@ class CustomBuildPy(build_py):
             shutil.copytree(os.path.join(current_dir, name), dst)
 
     def generate_pyi_file(self):
-        generate_pyi_file(name='_C', root='./csrc', output_dir='./stubs', c_py_path='./deep_gemm/_C.py')
+        generate_pyi_file(name='_C', root='./csrc', output_dir='./stubs')
         pyi_source = os.path.join(current_dir, 'stubs', '_C.pyi')
         pyi_target = os.path.join(self.build_lib, 'deep_gemm', '_C.pyi')
 
@@ -204,11 +208,35 @@ class CachedWheelsCommand(_bdist_wheel):
 
 
 if __name__ == '__main__':
+    if sys.platform == "win32":
+        try:
+            import subprocess
+            repo_path = os.path.join(os.path.dirname(__file__), "third-party", "cutlass")
+            subprocess.run(
+                ['pip3', 'install', 'patchpy'],
+                cwd=repo_path,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            from patchpy import DiffFile
+            subprocess.run(
+                ['git', 'reset', '--hard'],
+                cwd=repo_path,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            patch = DiffFile.from_path(os.path.join(os.path.dirname(__file__), "cutlass.patch"))
+            patch.apply(root=repo_path)
+        except Exception as err:
+            print("Cannot automatically patch cutlass memory_sm75.h due to:")
+            print(err)
+
     # noinspection PyTypeChecker
     setuptools.setup(
         name='deep_gemm',
         version=get_package_version(),
-        python_requires='>=3.10',
         packages=find_packages('.'),
         package_data={
             'deep_gemm': [
@@ -219,7 +247,6 @@ if __name__ == '__main__':
         },
         ext_modules=get_ext_modules(),
         zip_safe=False,
-        options={'bdist_wheel': {'py_limited_api': 'cp310'}},
         cmdclass={
             'build_py': CustomBuildPy,
             'bdist_wheel': CachedWheelsCommand,

@@ -211,24 +211,40 @@ if __name__ == '__main__':
     if sys.platform == "win32":
         try:
             import subprocess
-            repo_path = os.path.join(os.path.dirname(__file__), "third-party", "cutlass")
-            subprocess.run(
-                ['pip3', 'install', 'patchpy'],
-                cwd=repo_path,
-                check=True,
-                capture_output=True,
-                text=True
+            def apply_cutlass_patch(deepgemm_src: Path, patch: Path) -> None:
+                """Apply a patch to DeepGEMM's vendored CUTLASS submodule. Idempotent."""
+                cutlass_dir = deepgemm_src / "third-party" / "cutlass"
+                patch = patch.resolve()
+
+                if not cutlass_dir.is_dir():
+                    raise FileNotFoundError(f"CUTLASS submodule not found: {cutlass_dir}")
+                if not patch.is_file():
+                    raise FileNotFoundError(f"Patch not found: {patch}")
+
+                def git_apply(*args: str) -> subprocess.CompletedProcess:
+                    return subprocess.run(
+                        ["git", "apply", "--ignore-whitespace", *args, str(patch)],
+                        cwd=cutlass_dir,
+                        capture_output=True,
+                        text=True,
+                    )
+
+                # If the patch reverses cleanly, it's already applied.
+                if git_apply("--reverse", "--check").returncode == 0:
+                    print(f"{patch.name} already applied to {cutlass_dir}")
+                    return
+
+                result = git_apply()
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"Failed to apply {patch} to {cutlass_dir}:\n{result.stderr}"
+                    )
+                print(f"Applied {patch.name} to {cutlass_dir}")
+
+            apply_cutlass_patch(
+                deepgemm_src=Path(__file__).parent,
+                patch=Path(__file__).parent / "cutlass.patch"
             )
-            from patchpy import DiffFile
-            subprocess.run(
-                ['git', 'reset', '--hard'],
-                cwd=repo_path,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            patch = DiffFile.from_path(os.path.join(os.path.dirname(__file__), "cutlass.patch"))
-            patch.apply(root=repo_path)
         except Exception as err:
             print("Cannot automatically patch cutlass memory_sm75.h due to:")
             print(err)

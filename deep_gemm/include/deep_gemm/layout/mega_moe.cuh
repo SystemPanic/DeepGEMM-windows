@@ -332,7 +332,7 @@ struct Buffer {
 
     CUTLASS_HOST_DEVICE
     Data get_data_buffer(const uint32_t& token_idx, const bool& global = false) const {
-        DG_DEVICE_ASSERT(num_ranks == 1 or global);
+        DG_UNIFIED_ASSERT(num_ranks == 1 or global);
         return Data(
             data_layout.num_bytes,
             data_layout.require_tma_alignment,

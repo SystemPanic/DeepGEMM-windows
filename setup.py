@@ -24,10 +24,15 @@ DG_FORCE_BUILD = int(os.getenv('DG_FORCE_BUILD', '0')) == 1
 DG_USE_LOCAL_VERSION = int(os.getenv('DG_USE_LOCAL_VERSION', '1')) == 1
 
 # Compiler flags
-cxx_flags = ['-std=c++20', '-O3', '-fPIC', '-Wno-psabi', '-Wno-deprecated-declarations',
-             '-DPy_LIMITED_API=0x030a0000',
-             '-DDJ_DISABLE_GIL=1',
-             f'-D_GLIBCXX_USE_CXX11_ABI={int(torch.compiled_with_cxx11_abi())}']
+if sys.platform == "win32":
+    cxx_flags =  ["/std:c++20", "/O2", "/permissive-", "/utf-8", "/DNOMINMAX", "/Zc:preprocessor",
+                  '-DPy_LIMITED_API=0x030a0000',
+                  '-DDJ_DISABLE_GIL=1']
+else:
+    cxx_flags = ['-std=c++20', '-O3', '-fPIC', '-Wno-psabi', '-Wno-deprecated-declarations',
+                 '-DPy_LIMITED_API=0x030a0000',
+                 '-DDJ_DISABLE_GIL=1',
+                 f'-D_GLIBCXX_USE_CXX11_ABI={int(torch.compiled_with_cxx11_abi())}']
 
 # Sources
 current_dir = os.path.dirname(os.path.realpath(__file__))
@@ -40,7 +45,11 @@ build_include_dirs = [
     'third-party/cutlass/include',
 ]
 build_libraries = ['cudart']
-build_library_dirs = [f'{CUDA_HOME}/lib64']
+if sys.platform == "win32":
+    build_libraries += ['cublas', 'cublasLt']
+    build_library_dirs = [f'{CUDA_HOME}/lib/x64']
+else:
+    build_library_dirs = [f'{CUDA_HOME}/lib64']
 third_party_include_dirs = [
     'third-party/cutlass/include/cute',
     'third-party/cutlass/include/cutlass',
@@ -204,6 +213,47 @@ class CachedWheelsCommand(_bdist_wheel):
 
 
 if __name__ == '__main__':
+    if sys.platform == "win32":
+        try:
+            import subprocess
+            def apply_cutlass_patch(deepgemm_src: Path, patch: Path) -> None:
+                """Apply a patch to DeepGEMM's vendored CUTLASS submodule. Idempotent."""
+                cutlass_dir = deepgemm_src / "third-party" / "cutlass"
+                patch = patch.resolve()
+
+                if not cutlass_dir.is_dir():
+                    raise FileNotFoundError(f"CUTLASS submodule not found: {cutlass_dir}")
+                if not patch.is_file():
+                    raise FileNotFoundError(f"Patch not found: {patch}")
+
+                def git_apply(*args: str) -> subprocess.CompletedProcess:
+                    return subprocess.run(
+                        ["git", "apply", "--ignore-whitespace", *args, str(patch)],
+                        cwd=cutlass_dir,
+                        capture_output=True,
+                        text=True,
+                    )
+
+                # If the patch reverses cleanly, it's already applied.
+                if git_apply("--reverse", "--check").returncode == 0:
+                    print(f"{patch.name} already applied to {cutlass_dir}")
+                    return
+
+                result = git_apply()
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"Failed to apply {patch} to {cutlass_dir}:\n{result.stderr}"
+                    )
+                print(f"Applied {patch.name} to {cutlass_dir}")
+
+            apply_cutlass_patch(
+                deepgemm_src=Path(__file__).parent,
+                patch=Path(__file__).parent / "cutlass.patch"
+            )
+        except Exception as err:
+            print("Cannot automatically patch cutlass memory_sm75.h due to:")
+            print(err)
+
     # noinspection PyTypeChecker
     setuptools.setup(
         name='deep_gemm',

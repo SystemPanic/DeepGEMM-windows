@@ -47,7 +47,8 @@ build_include_dirs = [
 build_libraries = ['cudart']
 if sys.platform == "win32":
     build_libraries += ['cublas', 'cublasLt']
-    build_library_dirs = [f'{CUDA_HOME}/lib/x64']
+    _cuda_lib_arch = 'arm64' if platform.machine().lower() in ('arm64', 'aarch64') else 'x64'
+    build_library_dirs = [os.path.join(CUDA_HOME, 'lib', _cuda_lib_arch)]
 else:
     build_library_dirs = [f'{CUDA_HOME}/lib64']
 third_party_include_dirs = [

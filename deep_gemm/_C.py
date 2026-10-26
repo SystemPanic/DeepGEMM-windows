@@ -5,16 +5,33 @@ operator registration from pybind to ``TORCH_LIBRARY``. It loads the compiled
 extension and forwards calls to ``torch.ops.deep_gemm``.
 """
 
+import os
 import torch
+from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
+
+_dll_dir_handles = []  # keep add_dll_directory handles alive
 
 
 def _load_extension():
-    so_files = list(Path(__file__).parent.glob('_C_extension*.so'))
-    assert len(so_files) == 1, (
-        f'Expected one _C_extension*.so file, found {len(so_files)}: {so_files}'
+    here = Path(__file__).parent
+    ext_files = sorted(
+        p for p in here.glob('_C_extension*')
+        if any(p.name.endswith(sfx) for sfx in EXTENSION_SUFFIXES)
     )
-    torch.ops.load_library(str(so_files[0]))
+    assert len(ext_files) == 1, (
+        f'Expected one _C_extension compiled module '
+        f'(suffixes {EXTENSION_SUFFIXES}), found {len(ext_files)}: {ext_files}'
+    )
+
+    if os.name == 'nt':
+        # Python 3.8+ no longer searches PATH for a module's dependent DLLs,
+        # so register the package dir and torch's lib dir explicitly.
+        for d in (here, Path(torch.__file__).parent / 'lib'):
+            if d.is_dir():
+                _dll_dir_handles.append(os.add_dll_directory(str(d)))
+
+    torch.ops.load_library(str(ext_files[0]))
 
 
 _load_extension()

@@ -1,7 +1,12 @@
 #pragma once
 
+#if defined(_WIN32)
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 
+#include <cstdint>
 #include <initializer_list>
 #include <string>
 
@@ -18,6 +23,8 @@ namespace deep_gemm::mlopart {
 // We have to use IPC to allocate localized memory via MLOPart prior to CUDA 13.4
 // For convenience this is done in Python, called through the CPython limited API
 // NOTES: the extension does not link pybind11, and ops may run with the GIL released
+// NOTES: the IPC path exchanges POSIX file descriptors, so MLOPart is Linux-only;
+//        on Windows `is_available()` always returns false
 class PyObjectRef {
     PyObject* ptr;
 
@@ -98,14 +105,25 @@ static PyObject* get_device_uuid() {
 }
 
 static bool is_available() {
+#if defined(_WIN32)
+    // POSIX file-descriptor IPC is not supported on Windows
+    return false;
+#else
     const GILGuard gil;
     const auto result = call("is_available", {get_device_uuid()});
     const auto available = PyObject_IsTrue(result.get());
     check_python_error();
     return available == 1;
+#endif
 }
 
 static CUmemGenericAllocationHandle create_memory(const size_t& num_bytes, const int& domain_idx) {
+#if defined(_WIN32)
+    (void) num_bytes;
+    (void) domain_idx;
+    DG_HOST_UNREACHABLE("MLOPart is not supported on Windows");
+    return 0;
+#else
     int fd;
     {
         const GILGuard gil;
@@ -118,11 +136,14 @@ static CUmemGenericAllocationHandle create_memory(const size_t& num_bytes, const
         &handle, reinterpret_cast<void*>(static_cast<intptr_t>(fd)), CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR));
     close(fd);
     return handle;
+#endif
 }
 
 static void release() {
+#if !defined(_WIN32)
     const GILGuard gil;
     call("release", {});
+#endif
 }
 
 }  // namespace deep_gemm::mlopart

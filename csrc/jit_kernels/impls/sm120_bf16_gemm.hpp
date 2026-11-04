@@ -2,14 +2,16 @@
 
 #include <algorithm>
 #include <format>
-#include <torch/python.h>
+#include <torch/csrc/stable/library.h>
+#include <torch/csrc/stable/ops.h>
+#include "../../utils/torch_compat.hpp"
 
 #include "../../runtime/runtime.hpp"
 #include "../../utils/exception.hpp"
 #include "../../utils/math.hpp"
 #include "../heuristics/sm120.hpp"
 
-#include "epilogue.hpp"
+#include "sm120_epilogue.hpp"
 #include "runtime_utils.hpp"
 
 namespace deep_gemm {
@@ -21,8 +23,10 @@ public:
         GemmConfig gemm_config;
         deep_jit::cuda::LaunchOptions options;
         const std::optional<std::string> epilogue_type;
-        int64_t stride_cd_m;
-        int64_t stride_cd_batch;
+        EpilogueOperatorArgs epilogue_args{};
+        int stride_d_m;
+        int stride_c_m = 0;
+        int stride_d_batch = 0;
 
         void* gmem_d;
         void* gmem_c;
@@ -80,8 +84,9 @@ static void __instantiate_kernel() {{
         k_n_warps));
 
         // Launch
-        // NOTES: `epilogue_type_t` is a template-only parameter of `sm120_bf16_gemm_impl`
-        //        (it carries no runtime state there), so no epilogue argument is launched.
+        // NOTES: `epilogue_type_t` is instantiated stateless (it adds no members over
+        //        `EpilogueOperatorArgs`), so `EpilogueOperatorArgs` marshals as the runtime epilogue
+        //        argument, the same way the SM100 launchers pass it.
         jit->launch(
             kernel, args.options,
             args.gmem_d, args.gmem_c,
@@ -89,17 +94,17 @@ static void __instantiate_kernel() {{
             args.grouped_layout,
             args.tensor_map_buffer,
             args.gemm_desc.m, args.gemm_desc.n, args.gemm_desc.k,
-            args.stride_cd_m, args.stride_cd_batch,
+            args.epilogue_args, args.stride_d_m, args.stride_c_m, args.stride_d_batch,
             args.tensor_map_a, args.tensor_map_b,
             args.tensor_map_cd
         );
     }
 };
 
-static void sm120_bf16_gemm(const torch::Tensor& a,
-                            const torch::Tensor& b,
-                            const std::optional<torch::Tensor>& c,
-                            const torch::Tensor& d,
+static void sm120_bf16_gemm(const torch::stable::Tensor& a,
+                            const torch::stable::Tensor& b,
+                            const std::optional<torch::stable::Tensor>& c,
+                            const torch::stable::Tensor& d,
                             const int& m, const int& n, const int& k,
                             const cute::UMMA::Major& major_a, const cute::UMMA::Major& major_b,
                             const std::string& compiled_dims) {
@@ -146,10 +151,11 @@ static void sm120_bf16_gemm(const torch::Tensor& a,
             .cluster_dim = dim3(1, 1, 1),
         },
         .epilogue_type = std::nullopt,
-        .stride_cd_m = d.stride(-2),
-        .stride_cd_batch = 0,
-        .gmem_d = d.data_ptr(),
-        .gmem_c = c.has_value() ? cd.data_ptr() : nullptr,
+        .stride_d_m = static_cast<int>(d.stride(-2)),
+        .stride_c_m = 0,
+        .stride_d_batch = 0,
+        .gmem_d = d.mutable_data_ptr(),
+        .gmem_c = c.has_value() ? cd.mutable_data_ptr() : nullptr,
         .gmem_a_ptr = nullptr,
         .gmem_b_ptr = nullptr,
         .grouped_layout = nullptr,
@@ -160,10 +166,10 @@ static void sm120_bf16_gemm(const torch::Tensor& a,
     });
 }
 
-static void sm120_m_grouped_bf16_gemm_contiguous(const torch::Tensor& a,
-                                                 const torch::Tensor& b,
-                                                 const torch::Tensor& d,
-                                                 const torch::Tensor& grouped_layout,
+static void sm120_m_grouped_bf16_gemm_contiguous(const torch::stable::Tensor& a,
+                                                 const torch::stable::Tensor& b,
+                                                 const torch::stable::Tensor& d,
+                                                 const torch::stable::Tensor& grouped_layout,
                                                  const int& num_groups, const int& m, const int& n, const int& k,
                                                  const cute::UMMA::Major& major_a, const cute::UMMA::Major& major_b,
                                                  const std::string& compiled_dims,
@@ -220,13 +226,14 @@ static void sm120_m_grouped_bf16_gemm_contiguous(const torch::Tensor& a,
             .cluster_dim = dim3(1, 1, 1),
         },
         .epilogue_type = std::nullopt,
-        .stride_cd_m = d.stride(-2),
-        .stride_cd_batch = 0,
-        .gmem_d = d.data_ptr(),
+        .stride_d_m = static_cast<int>(d.stride(-2)),
+        .stride_c_m = 0,
+        .stride_d_batch = 0,
+        .gmem_d = d.mutable_data_ptr(),
         .gmem_c = nullptr,
         .gmem_a_ptr = nullptr,
         .gmem_b_ptr = nullptr,
-        .grouped_layout = grouped_layout.data_ptr(),
+        .grouped_layout = grouped_layout.mutable_data_ptr(),
         .tensor_map_buffer = nullptr,
         .tensor_map_a = tensor_map_a,
         .tensor_map_b = tensor_map_b,
@@ -234,10 +241,10 @@ static void sm120_m_grouped_bf16_gemm_contiguous(const torch::Tensor& a,
     });
 }
 
-static void sm120_m_grouped_bf16_gemm_masked(const torch::Tensor& a,
-                                             const torch::Tensor& b,
-                                             const torch::Tensor& d,
-                                             const torch::Tensor& masked_m,
+static void sm120_m_grouped_bf16_gemm_masked(const torch::stable::Tensor& a,
+                                             const torch::stable::Tensor& b,
+                                             const torch::stable::Tensor& d,
+                                             const torch::stable::Tensor& masked_m,
                                              const int& num_groups, const int& m, const int& n, const int& k,
                                              const int& expected_m,
                                              const cute::UMMA::Major& major_a, const cute::UMMA::Major& major_b,
@@ -257,7 +264,13 @@ static void sm120_m_grouped_bf16_gemm_masked(const torch::Tensor& a,
         .compiled_dims = compiled_dims,
         .expected_m = expected_m, .expected_n = n, .expected_k = k, .expected_num_groups = num_groups
     };
-    const auto config = get_best_config<SM120ArchSpec>(desc);
+    auto config = get_best_config<SM120ArchSpec>(desc);
+    // The vendored kernel's TMA-store epilogue writes full BLOCK_M tiles with no
+    // masked-boundary fallback; for m % BLOCK_M != 0 a boundary tile would spill into
+    // the next group's rows (groups are interior to the flat M dim, so TMA cannot
+    // clamp them). Force the masked-aware scalar store path for such shapes.
+    if (m % config.layout.block_m != 0)
+        config.storage_config.swizzle_cd_mode = 0;
 
     const auto tensor_map_a = make_tma_a_desc(major_a, a, m, k,
                                               config.storage_config.load_block_m,
@@ -285,13 +298,14 @@ static void sm120_m_grouped_bf16_gemm_masked(const torch::Tensor& a,
             .cluster_dim = dim3(1, 1, 1),
         },
         .epilogue_type = std::nullopt,
-        .stride_cd_m = n,
-        .stride_cd_batch = 0,
-        .gmem_d = d.data_ptr(),
+        .stride_d_m = n,
+        .stride_c_m = 0,
+        .stride_d_batch = 0,
+        .gmem_d = d.mutable_data_ptr(),
         .gmem_c = nullptr,
         .gmem_a_ptr = nullptr,
         .gmem_b_ptr = nullptr,
-        .grouped_layout = masked_m.data_ptr(),
+        .grouped_layout = masked_m.mutable_data_ptr(),
         .tensor_map_buffer = nullptr,
         .tensor_map_a = tensor_map_a,
         .tensor_map_b = tensor_map_b,
@@ -299,12 +313,12 @@ static void sm120_m_grouped_bf16_gemm_masked(const torch::Tensor& a,
     });
 }
 
-static void sm120_bf16_k_grouped_gemm(const torch::Tensor& a,
-                                      const torch::Tensor& b,
-                                      const std::optional<torch::Tensor>& c,
-                                      const torch::Tensor& d,
+static void sm120_bf16_k_grouped_gemm(const torch::stable::Tensor& a,
+                                      const torch::stable::Tensor& b,
+                                      const std::optional<torch::stable::Tensor>& c,
+                                      const torch::stable::Tensor& d,
                                       const int& m, const int& n,
-                                      const std::vector<int>& ks, const torch::Tensor& ks_tensor,
+                                      const std::vector<int>& ks, const torch::stable::Tensor& ks_tensor,
                                       const cute::UMMA::Major& major_a, const cute::UMMA::Major& major_b,
                                       const std::string& compiled_dims) {
     DG_HOST_ASSERT(major_a == cute::UMMA::Major::MN and major_b == cute::UMMA::Major::MN);
@@ -319,15 +333,13 @@ static void sm120_bf16_k_grouped_gemm(const torch::Tensor& a,
     // SM120 K-grouped kernel expects per-group compact K-major layout:
     // each group stored as [mn, Ki] flattened, groups concatenated.
     // API provides MN-major a[sum_k, m], b[sum_k, n] — transpose per group.
-    auto a_km = torch::empty({static_cast<int64_t>(sum_k) * m}, a.options());
-    auto b_km = torch::empty({static_cast<int64_t>(sum_k) * n}, b.options());
+    auto a_km = torch::stable::new_empty(a, {static_cast<int64_t>(sum_k) * m});
+    auto b_km = torch::stable::new_empty(b, {static_cast<int64_t>(sum_k) * n});
     int prefix = 0;
     for (const auto ki: ks) {
         if (ki == 0) continue;
-        a_km.slice(0, static_cast<int64_t>(prefix) * m, static_cast<int64_t>(prefix + ki) * m)
-            .copy_(a.slice(0, prefix, prefix + ki).t().contiguous().flatten());
-        b_km.slice(0, static_cast<int64_t>(prefix) * n, static_cast<int64_t>(prefix + ki) * n)
-            .copy_(b.slice(0, prefix, prefix + ki).t().contiguous().flatten());
+        torch_compat::copy_(torch_compat::slice(a_km, 0, static_cast<int64_t>(prefix) * m, static_cast<int64_t>(prefix + ki) * m), torch::stable::flatten(torch::stable::contiguous(torch::stable::transpose(torch_compat::slice(a, 0, prefix, prefix + ki), 0, 1))));
+        torch_compat::copy_(torch_compat::slice(b_km, 0, static_cast<int64_t>(prefix) * n, static_cast<int64_t>(prefix + ki) * n), torch::stable::flatten(torch::stable::contiguous(torch::stable::transpose(torch_compat::slice(b, 0, prefix, prefix + ki), 0, 1))));
         prefix += ki;
     }
     const auto num_groups = static_cast<int>(ks.size());
@@ -345,13 +357,17 @@ static void sm120_bf16_k_grouped_gemm(const torch::Tensor& a,
         .tc_util = runtime->get_tc_util(), .compiled_dims = compiled_dims,
         .expected_m = m, .expected_n = n, .expected_k = max_k, .expected_num_groups = num_groups
     };
-    const auto config = get_best_config<SM120ArchSpec>(desc);
+    auto config = get_best_config<SM120ArchSpec>(desc);
+    // The vendored kernel's TMA-store epilogue writes full BLOCK_M tiles with no
+    // boundary fallback; for m % BLOCK_M != 0 a group's tail tile would spill into the
+    // next group's slab (D is one flat 2D descriptor, so TMA can only clamp at the
+    // outermost M dim). Force the group-bounded scalar store path for such shapes.
+    if (m % config.layout.block_m != 0)
+        config.storage_config.swizzle_cd_mode = 0;
 
     // Allocate tensor map buffer for dynamic replacement (A + B per SM)
     const auto num_sms = runtime->get_num_sms();
-    const auto tensor_map_buffer = torch::empty(
-        {num_sms * 2 * static_cast<int>(sizeof(CUtensorMap))},
-        a.options().dtype(torch::kByte));
+    const auto tensor_map_buffer = torch::stable::new_empty(a, {num_sms * 2 * static_cast<int>(sizeof(CUtensorMap))}, torch::headeronly::ScalarType::Byte);
 
     // Use first non-zero K for initial TMA descriptors
     int first_k = 0;
@@ -385,23 +401,24 @@ static void sm120_bf16_k_grouped_gemm(const torch::Tensor& a,
             .cluster_dim = dim3(1, 1, 1),
         },
         .epilogue_type = std::nullopt,
-        .stride_cd_m = d.stride(-2),
-        .stride_cd_batch = 0,
-        .gmem_d = d.data_ptr(),
-        .gmem_c = cd.data_ptr(),
-        .gmem_a_ptr = a_km.data_ptr(),
-        .gmem_b_ptr = b_km.data_ptr(),
-        .grouped_layout = ks_tensor.data_ptr(),
-        .tensor_map_buffer = tensor_map_buffer.data_ptr(),
+        .stride_d_m = static_cast<int>(d.stride(-2)),
+        .stride_c_m = 0,
+        .stride_d_batch = 0,
+        .gmem_d = d.mutable_data_ptr(),
+        .gmem_c = cd.mutable_data_ptr(),
+        .gmem_a_ptr = a_km.mutable_data_ptr(),
+        .gmem_b_ptr = b_km.mutable_data_ptr(),
+        .grouped_layout = ks_tensor.mutable_data_ptr(),
+        .tensor_map_buffer = tensor_map_buffer.mutable_data_ptr(),
         .tensor_map_a = tensor_map_a,
         .tensor_map_b = tensor_map_b,
         .tensor_map_cd = tensor_map_cd,
     });
 }
 
-static void sm120_bf16_bhr_hdr_bhd(const torch::Tensor& tensor_a,
-                                   const torch::Tensor& tensor_b,
-                                   const torch::Tensor& tensor_d,
+static void sm120_bf16_bhr_hdr_bhd(const torch::stable::Tensor& tensor_a,
+                                   const torch::stable::Tensor& tensor_b,
+                                   const torch::stable::Tensor& tensor_d,
                                    const int& b, const int& h, const int& r, const int& d,
                                    const std::string& compiled_dims = "nk") {
     const auto desc = GemmDesc {
@@ -441,9 +458,10 @@ static void sm120_bf16_bhr_hdr_bhd(const torch::Tensor& tensor_a,
             .cluster_dim = dim3(1, 1, 1),
         },
         .epilogue_type = std::nullopt,
-        .stride_cd_m = tensor_d.stride(0),
-        .stride_cd_batch = tensor_d.stride(1),
-        .gmem_d = tensor_d.data_ptr(),
+        .stride_d_m = static_cast<int>(tensor_d.stride(0)),
+        .stride_c_m = 0,
+        .stride_d_batch = static_cast<int>(tensor_d.stride(1)),
+        .gmem_d = tensor_d.mutable_data_ptr(),
         .gmem_c = nullptr,
         .gmem_a_ptr = nullptr,
         .gmem_b_ptr = nullptr,
@@ -455,9 +473,9 @@ static void sm120_bf16_bhr_hdr_bhd(const torch::Tensor& tensor_a,
     });
 }
 
-static void sm120_bf16_bhd_hdr_bhr(const torch::Tensor& tensor_a,
-                                   const torch::Tensor& tensor_b,
-                                   const torch::Tensor& tensor_d,
+static void sm120_bf16_bhd_hdr_bhr(const torch::stable::Tensor& tensor_a,
+                                   const torch::stable::Tensor& tensor_b,
+                                   const torch::stable::Tensor& tensor_d,
                                    const int& b, const int& h, const int& r, const int& d,
                                    const std::string& compiled_dims = "nk") {
     // bhd,hdr->bhr: batch=h, M=b, N=r, K=d
@@ -502,9 +520,10 @@ static void sm120_bf16_bhd_hdr_bhr(const torch::Tensor& tensor_a,
             .cluster_dim = dim3(1, 1, 1),
         },
         .epilogue_type = std::nullopt,
-        .stride_cd_m = tensor_d.stride(0),
-        .stride_cd_batch = tensor_d.stride(1),
-        .gmem_d = tensor_d.data_ptr(),
+        .stride_d_m = static_cast<int>(tensor_d.stride(0)),
+        .stride_c_m = 0,
+        .stride_d_batch = static_cast<int>(tensor_d.stride(1)),
+        .gmem_d = tensor_d.mutable_data_ptr(),
         .gmem_c = nullptr,
         .gmem_a_ptr = nullptr,
         .gmem_b_ptr = nullptr,

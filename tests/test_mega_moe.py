@@ -73,9 +73,11 @@ def _copy_fp8_sf(dst: torch.Tensor, src: torch.Tensor, num_tokens: int) -> None:
 # TODO: skip the test for SM90
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
+    global transformed_l1_weights, transformed_l2_weights
     assert args.activation != 'situ' or args.mma_type != 'bf16xbf16', \
         'SiTU is only supported by the FP8/FP4 Mega MoE kernel path'
     rank_idx, num_ranks, group = init_dist(local_rank, num_local_ranks)
+    deep_gemm.use_deterministic_algorithms(True)
     torch.manual_seed(rank_idx)
     random.seed(rank_idx)
 
@@ -84,12 +86,16 @@ def test(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     num_max_tokens_per_rank = args.num_max_tokens_per_rank
     num_tokens = max(0, args.num_max_tokens_per_rank - random.randint(0, args.num_max_removed_tokens)) \
         if args.num_tokens == 0 else args.num_tokens
+    if args.empty_rank == rank_idx:
+        num_tokens = 0
     num_shared_experts = args.num_shared_experts
     num_experts, num_topk = args.num_experts, args.num_topk
     num_experts_per_rank = num_experts // num_ranks
     hidden, intermediate_hidden = args.hidden, args.intermediate_hidden
     shared_intermediate_hidden = intermediate_hidden * num_shared_experts
     assert num_tokens <= num_max_tokens_per_rank
+
+    norm_gamma = 0.5 + torch.arange(hidden, device="cuda", dtype=torch.float32) / hidden
 
     # Allocate symmetric memory
     buffer = deep_gemm.get_symm_buffer_for_mega_moe(
@@ -180,6 +186,16 @@ def test(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         else:
             transformed_shared_l1_weights = transformed_shared_l2_weights = None
 
+        if args.use_localization:
+            def localize(transformed):
+                if isinstance(transformed, tuple):
+                    return deep_gemm.localize(transformed[0]), transformed[1]
+                return deep_gemm.localize(transformed)
+            transformed_l1_weights, transformed_l2_weights = localize(transformed_l1_weights), localize(transformed_l2_weights)
+            if num_shared_experts > 0:
+                transformed_shared_l1_weights, transformed_shared_l2_weights = localize(transformed_shared_l1_weights), localize(transformed_shared_l2_weights)
+            deep_gemm.destroy_localizer()
+
     # Run fused mega MoE
     # NOTES: copy x into buffer before each call because debug mode zeros the entire buffer
     def copy_inputs_to_buffer():
@@ -207,6 +223,9 @@ def test(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             fast_math=bool(args.fast_math),
             activation_alpha=args.activation_alpha,
             activation_beta=args.activation_beta)
+        if args.post_expert_norm:
+            kernel_kwargs.update(post_expert_norm_gamma=norm_gamma,
+                                 post_expert_norm_eps=1e-8)
         if num_shared_experts > 0:
             kernel_kwargs.update(
                 shared_l1_weights=transformed_shared_l1_weights,
@@ -220,6 +239,7 @@ def test(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     dist_print(f' > Activation: type={args.activation}, limit={args.activation_clamp}, '
                f'alpha={args.activation_alpha}, beta={args.activation_beta}',
                once_in_node=True)
+    dist_print(f' > Localized weights: {args.use_localization}', once_in_node=True)
     dist_print(f' > Tokens: {num_tokens}/{num_max_tokens_per_rank}', once_in_node=True)
     dist_print(f' > Hidden: {hidden}', once_in_node=True)
     dist_print(f' > Intermediate: {intermediate_hidden}', once_in_node=True)
@@ -241,12 +261,85 @@ def test(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         dist.destroy_process_group()
         return
 
+    if args.post_expert_norm:
+        assert is_bf16xbf16 and num_shared_experts == 0
+        create_inputs()
+        topk_weights.copy_(topk_weights.softmax(dim=-1).masked_fill(topk_idx < 0, 0))
+        # Small down scales exercise epsilon and prevent a routing-before-norm
+        # implementation from passing via approximate scale invariance.
+        l1_weights.mul_(0.1)
+        l2_weights.mul_(1e-5)
+        transformed_l1_weights, transformed_l2_weights = (
+            deep_gemm.transform_weights_for_mega_moe(l1_weights, l2_weights))
+        all_w1 = [torch.empty_like(l1_weights) for _ in range(num_ranks)]
+        all_w2 = [torch.empty_like(l2_weights) for _ in range(num_ranks)]
+        dist.all_gather(all_w1, l1_weights, group=group)
+        dist.all_gather(all_w2, l2_weights, group=group)
+        all_w1, all_w2 = torch.cat(all_w1), torch.cat(all_w2)
+        nvfp4_buffer = deep_gemm.SymmBuffer(
+            group, num_experts, num_max_tokens_per_rank, num_topk,
+            hidden, intermediate_hidden, mma_type='fp4xfp4', base=buffer)
+        assert nvfp4_buffer.buffer.data_ptr() == buffer.buffer.data_ptr()
+        assert nvfp4_buffer.handle is buffer.handle
+        def zero_fp4_weights(n, k):
+            return (
+                torch.zeros((num_experts_per_rank, n, k // 2), dtype=torch.int8, device='cuda'),
+                torch.full((num_experts_per_rank, n, k // 64), 0x38383838,
+                           dtype=torch.int32, device='cuda').transpose(-1, -2).contiguous().transpose(-1, -2))
+        fp4_w1, fp4_w2 = deep_gemm.transform_weights_for_mega_moe(
+            zero_fp4_weights(intermediate_hidden * 2, hidden),
+            zero_fp4_weights(hidden, intermediate_hidden))
+        def run_nvfp4():
+            nvfp4_buffer.x[:num_tokens].zero_()
+            nvfp4_buffer.x_sf[:num_tokens].fill_(0x38383838)
+            nvfp4_buffer.topk_idx[:num_tokens].copy_(topk_idx)
+            nvfp4_buffer.topk_weights[:num_tokens].copy_(topk_weights)
+            result = torch.empty_like(x)
+            deep_gemm.fp4_fp4_mega_moe(
+                result, fp4_w1, fp4_w2, nvfp4_buffer,
+                post_expert_norm_gamma=norm_gamma, post_expert_norm_eps=1e-8)
+            return result
+        expected = torch.zeros((num_tokens, hidden), device="cuda", dtype=torch.float32)
+        for expert in range(num_experts):
+            token, slot = (topk_idx == expert).nonzero(as_tuple=True)
+            if token.numel() == 0:
+                continue
+            gate, up = (x[token].float() @ all_w1[expert].float().T).bfloat16().chunk(2, -1)
+            if args.activation_clamp is not None:
+                gate = gate.clamp(max=args.activation_clamp)
+                up = up.clamp(-args.activation_clamp, args.activation_clamp)
+            intermediate = (torch.nn.functional.silu(gate.float()) * up.float()).bfloat16()
+            rows = (intermediate.float() @ all_w2[expert].float().T).bfloat16().float()
+            scaled = rows * norm_gamma
+            normalized = scaled * torch.rsqrt(scaled.square().mean(-1, keepdim=True) + 1e-8)
+            expected.index_add_(0, token, normalized * topk_weights[token, slot, None])
+        for _ in range(3):
+            torch.testing.assert_close(run_nvfp4(), torch.zeros_like(x), atol=0, rtol=0)
+            actual, _ = run_fused()
+            relative_error = (actual.float() - expected).norm() / expected.norm().clamp_min(1e-12)
+            assert relative_error < 0.005, relative_error.item()
+            torch.testing.assert_close(actual.float(), expected, atol=0.04, rtol=0.02)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            nvfp4_captured = run_nvfp4()
+            captured, _ = run_fused()
+        for _ in range(3):
+            graph.replay()
+            torch.testing.assert_close(nvfp4_captured, torch.zeros_like(x), atol=0, rtol=0)
+            torch.testing.assert_close(captured.float(), expected, atol=0.04, rtol=0.02)
+        dist_print("BF16 post-expert norm: eager and CUDA Graph reference checks passed", once_in_node=True)
+        dist.barrier()
+        buffer.destroy()
+        dist.destroy_process_group()
+        return
+
     # Non-overlapped baseline: EP dispatch + GEMM + EP combine
     deep_ep, tilelang_ops, tilelang_bench, is_legacy_loaded = import_baseline()
     alignment = deep_gemm.get_theoretical_mk_alignment_for_contiguous_layout()
     deep_gemm.set_mk_alignment_for_contiguous_layout(alignment)
     num_correctness_tests = 1 if args.num_correctness_tests is None else args.num_correctness_tests
-    ep_buffer = deep_ep.ElasticBuffer(
+    ep_buffer_type = (getattr(deep_ep, 'EPBuffer', None) or deep_ep.ElasticBuffer) if is_legacy_loaded else None
+    ep_buffer = ep_buffer_type(
         group,
         num_max_tokens_per_rank=num_max_tokens_per_rank, hidden=hidden,
         num_topk=num_topk, use_fp8_dispatch=not is_bf16xbf16,
@@ -347,10 +440,7 @@ def test(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             fused_y, fused_stats = run_fused()
             baseline_y, baseline_stats = run_baseline()
             assert torch.equal(fused_stats, baseline_stats)
-            if num_shared_experts == 0:
-                assert torch.equal(fused_y, baseline_y)
-            else:
-                assert calc_diff(fused_y, baseline_y) < 1e-8
+            assert torch.equal(fused_y, baseline_y), f'calc_diff={calc_diff(fused_y, baseline_y)}'
             if (i + 1) % 100 == 0 or i == num_correctness_tests - 1:
                 dist_print(f' > Correctness test #{i + 1}/{num_correctness_tests} passed', once_in_node=True)
         dist_print(once_in_node=True)
@@ -364,7 +454,8 @@ def test(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     num_recv_tokens = (gathered_topk_idx != -1).sum().item()
 
     # Benchmark
-    barrier_fn = lambda: ep_buffer.barrier(use_comm_stream=False) if ep_buffer else dist.all_reduce(torch.empty(1, device='cuda'))
+    barrier_kwargs = {'wait_comm_stream': False} if hasattr(deep_ep, 'EPBuffer') else {'use_comm_stream': False}
+    barrier_fn = lambda: ep_buffer.barrier(**barrier_kwargs) if ep_buffer else dist.all_reduce(torch.empty(1, device='cuda'))
     trace_path = None if not args.dump_profile_traces else f'{args.dump_profile_traces}/mega_moe_rank{rank_idx}.json'
     t_fused = bench_kineto(run_fused, 'mega_moe', barrier=barrier_fn, trace_path=trace_path)
     t_baseline = tilelang_bench(
@@ -457,8 +548,11 @@ if __name__ == '__main__':
     parser.add_argument('--masked-ratio', type=float, default=0.0, help='Mask some expert selections')
     parser.add_argument('--fast-math', type=int, default=1, help='Enable fast math (0 or 1, default: 1)')
     parser.add_argument('--mma-type', type=str, default='fp8xfp4', choices=('fp8xfp4', 'fp8xfp8', 'bf16xbf16'))
+    parser.add_argument('--use-localization', action='store_true', help='Localize the weights into the locality domains (requires MLOPart)')
 
     # Test settings
+    parser.add_argument('--post-expert-norm', action='store_true')
+    parser.add_argument('--empty-rank', type=int, default=-1)
     parser.add_argument('--num-correctness-tests', type=int, default=None, help='Pressure test')
     parser.add_argument('--dump-profile-traces', type=str, default='', help='Dump profiling trace JSONs')
     parser.add_argument('--local-rank-idx', type=int, default=None, help='Run as single process with this local rank (e.g. for NCU prof)')

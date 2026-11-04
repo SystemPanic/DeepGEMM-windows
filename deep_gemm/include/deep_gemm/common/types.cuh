@@ -8,7 +8,20 @@ enum class MmaKind {
     BF16        = 0,
     MXFP8FP4    = 1,
     MXF4        = 2,
+    // NVFP4: both operands are packed E2M1 with per-16-element E4M3 scale factors
+    NVFP4       = 3,
 };
+
+// Element sizes in bits: MXF4 and NVFP4 elements are sub-byte
+constexpr CUTLASS_HOST_DEVICE int get_element_bits(const MmaKind& mma_kind) {
+    switch (mma_kind) {
+        case MmaKind::BF16:     return 16;
+        case MmaKind::MXFP8FP4: return 8;
+        case MmaKind::MXF4:     return 4;
+        case MmaKind::NVFP4:    return 4;
+        default: return 0;
+    }
+}
 
 enum class GemmType {
     Normal                              = 0,
@@ -42,14 +55,16 @@ enum class KernelType {
     KernelNoSF = 2
 };
 
-// Host-visible runtime state of the `epilogue::transform` operators, which derive from
-// this struct without adding members, so the host fully determines the operator on launch.
-// Only the fields consumed by the selected epilogue type are meaningful
-struct EpilogueArgs {
+// Runtime state of the `epilogue::operators`, which derive from this struct without adding
+// members; only the fields consumed by the selected operator are meaningful
+struct EpilogueOperatorArgs {
     uint32_t* sfd = nullptr;
     uint32_t sfd_stride = 0;
     uint32_t shape_m = 0, shape_n = 0;
     float alpha = 1.0f;
+    bool is_sfd_128x4 = false;
 };
+
+static constexpr uint32_t kNumDeviceLocalityDomains = 2;
 
 } // namespace deep_gemm
